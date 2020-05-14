@@ -4,6 +4,13 @@ from numpy import random as rd
 from pyspark import SparkContext, SparkConf
 from odf import text, teletype
 from odf.opendocument import load
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.preprocessing import scale
+from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
+
+main_set = []
 
 # spark://master:7077
 class init_spark:
@@ -21,7 +28,7 @@ class Dataset:
         self.__trans_key = ["filter", "map", "distinct", "union", "intersection",
                             "coalesce", "join", "tupleSize"]
         self.init_rdd = None
-        self.stageTime = []
+        self.stageTime = [0]*self.__jobs
 
     def genrate_dataset(self):
         dataset = []
@@ -138,33 +145,6 @@ class Dataset:
     @staticmethod
     def extract_time(log):
         space = -1
-        for i in range(len(log)-1, -1, -1):
-            if log[i] == " ": space += 1
-            if space == 0: end_index = i-1
-            if space == 1: start_index = i-1; break
-        return log[start_index:end_index]
-
-    def getStageTime(self):
-        log_file = load("/home/malay/Desktop/Log.odt")
-        allparas = log_file.getElementsByType(text.P)
-        job_id = -1
-        for i in range(len(allparas)):
-            nextLog = None
-            str = teletype.extractText(allparas[i])
-            if str[0] == "*": job_id += 1
-            if i + 2 < len(allparas):
-                nextLog = teletype.extractText(allparas[i + 2])
-            if nextLog != None and nextLog[0] == "*":
-                print("time for job {} -> {}".format(job_id, str))
-                print(self.extract_time(str))
-            if nextLog == None:
-                print("time for job {} -> {}".format(job_id, str))
-                print(self.extract_time(str))
-                break
-
-    @staticmethod
-    def extract_time(log):
-        space = -1
         for i in range(len(log) - 1, -1, -1):
             if log[i] == " ":
                 space += 1
@@ -172,29 +152,62 @@ class Dataset:
                 if space == 1: start_index = i + 1; break
         return log[start_index:end_index]
 
-    def getStageTime(self):
-        log_file = load("/home/malay/Desktop/Log.odt")
+    def getStageTime(self, data, path):
+        log_file = load(path)
         allparas = log_file.getElementsByType(text.P)
         job_id = -1
         for i in range(len(allparas)):
-            nextLog = None
             str = teletype.extractText(allparas[i])
-            if str[0] == "*": job_id += 1
-            if i + 2 < len(allparas):
-                nextLog = teletype.extractText(allparas[i + 2])
-            if nextLog != None and nextLog[0] == "*":
-                print("time for job {} -> {}".format(job_id, str))
-                self.stageTime.append(int(self.extract_time(str))*1000)
-            if nextLog == None:
-                print("time for job {} -> {}".format(job_id, str))
-                self.stageTime.append(int(self.extract_time(str)) * 1000)
-                break
+            if str[0] == "*":
+                job_id += 1
+            if str[23:35] == "DAGScheduler":
+                if str[37:48] == "ResultStage":
+                    self.stageTime[job_id] = self.stageTime[job_id] + float(self.extract_time(str))*1000
+
+        for i in range(len(data)):
+            data[i].append(self.stageTime[i])
+        return data
+            # if i + 2 < len(allparas):
+            #     nextLog = teletype.extractText(allparas[i + 2])
+            # if nextLog != None and nextLog[0] == "*":
+            #     print("time for job {} -> {}".format(job_id, str))
+            #     self.stageTime.append(float(self.extract_time(str)) * 1000)
+            # if nextLog == None:
+            #     print("time for job {} -> {}".format(job_id, str))
+            #     self.stageTime.append(float(self.extract_time(str)) * 1000)
+            #     break
+
+
+def merge(data):
+    for i in range(len(data)):
+        main_set.append(data[i])
 
 
 spark = init_spark(4, "Predict Job Time", "INFO").sc
 
-dataset = Dataset(100, spark, 100)
-dataset.genrate_dataset()
+obj1 = Dataset(10, spark, 100)
+data = obj1.genrate_dataset()
+data = obj1.getStageTime(data, "/home/malay/Desktop/Log.odt")
+merge(data)
+
+main_set = np.array(main_set)
+x = main_set[:, :8]
+y = main_set[:, -1]
+y = y.reshape(len(y), 1)
+x = scale(x)
+xTrain, xTest, yTrain, yTest = train_test_split(x, y, test_size=0.3, random_state=9)
+
+linReg = LinearRegression()
+linReg.fit(xTrain, yTrain)
+yPred = linReg.predict(xTest)
+
+print("Mean Squared Error is", mean_squared_error(yTest, yPred))
+plt.scatter(yPred, yTest)
+
+df = pd.DataFrame(main_set)
+df.to_csv("/home/malay/Desktop/main_set.csv")
+
+
 
 
 
